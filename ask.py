@@ -5,9 +5,11 @@ Works without requiring vector database - uses sample teachings directly
 """
 
 from typing import Dict, Optional
+import re
 from config import settings
 from language_utils import LanguageDetector
 from rag_engine import SafetyFilter
+from ingest import DataIngestionPipeline
 from loguru import logger
 
 # Configure logger to suppress too much output
@@ -23,8 +25,21 @@ class SimpleChatbot:
         self.safety_filter = SafetyFilter()
         self.language_detector = LanguageDetector()
         
-        # Load sample teachings
+        # Load sample teachings as fallback
         self.teachings = self._load_sample_teachings()
+
+        # Try to load vector DB for retrieval over all ingested data
+        try:
+            pipeline = DataIngestionPipeline()
+            self.vector_store = pipeline.load_vector_store()
+            if self.vector_store:
+                # keep top_k in settings
+                self.top_k = settings.top_k_results
+            else:
+                self.top_k = 4
+        except Exception:
+            self.vector_store = None
+            self.top_k = 4
         
     def _load_sample_teachings(self) -> str:
         """Load sample teachings from file"""
@@ -45,7 +60,25 @@ class SimpleChatbot:
         Returns:
             Dictionary with answer, language, and metadata
         """
-        # Detect language
+        # Allow explicit language instruction in the question, e.g. "in Hindi" or "lang:hi"
+        lang_map = {
+            "english": "en", "hindi": "hi", "telugu": "te", "kannada": "kn",
+            "en": "en", "hi": "hi", "te": "te", "kn": "kn"
+        }
+
+        # Look for `lang:xx` patterns first
+        m = re.search(r"\blang\s*[:=]\s*(en|hi|te|kn)\b", question, re.I)
+        if m:
+            language = lang_map.get(m.group(1).lower())
+            question = re.sub(m.group(0), "", question, flags=re.I).strip()
+        else:
+            # Look for natural language instruction like 'in Hindi'
+            m2 = re.search(r"\bin\s+(english|hindi|telugu|kannada)\b", question, re.I)
+            if m2:
+                language = lang_map.get(m2.group(1).lower())
+                question = re.sub(m2.group(0), "", question, flags=re.I).strip()
+
+        # Detect language if still unspecified
         if language is None:
             language = self.language_detector.detect_language(question)
         
@@ -60,6 +93,35 @@ class SimpleChatbot:
                 "method": "safety_filter"
             }
         
+        # If vector DB available, use similarity search across all PDFs/TXTs
+        if getattr(self, 'vector_store', None) is not None:
+            try:
+                docs = self.vector_store.similarity_search(question, k=self.top_k)
+                if docs:
+                    # Prefer documents that match requested language (if metadata provided)
+                    if language:
+                        filtered = [d for d in docs if d.metadata and (
+                            (isinstance(d.metadata.get('language'), str) and d.metadata.get('language').startswith(language))
+                            or (isinstance(d.metadata.get('lang'), str) and d.metadata.get('lang').startswith(language))
+                        )]
+                        if filtered:
+                            docs = filtered
+
+                    passages = [re.sub(r'\s+', ' ', d.page_content.strip()) for d in docs]
+                    # Join retrieved passages into one readable paragraph
+                    answer_text = ' '.join(passages)
+                    sources = [{"content": d.metadata.get('source') if d.metadata else ""} for d in docs]
+                    return {
+                        "answer": answer_text,
+                        "language": language,
+                        "sources": sources,
+                        "is_safe": True,
+                        "method": "vector_retrieval"
+                    }
+            except Exception:
+                # fallback to sample teachings
+                pass
+
         # Get answer from teachings in detected language
         answer = self._find_relevant_answer(question, language)
         
@@ -83,7 +145,26 @@ class SimpleChatbot:
             Answer from teachings in the same language
         """
         question_lower = question.lower()
-        
+
+        # If the user requests a God-style response in the question (e.g. "as god", "god:", "[god]")
+        # return a single evocative paragraph in the requested language (English/Hindi fallback).
+        god_triggers = ["as god", "god:", "[god]", "as god,"]
+        if any(trigger in question_lower for trigger in god_triggers):
+            if language.startswith("hi"):
+                return (
+                    "मैं वह स्वर हूँ जिसने पहले प्रकाश को बुलाया, और वही शांति हूँ जो तुम्हारे भीतर का घर संभालती है। "
+                    "सुनो: मैं तुम्हारे दुख और खुशी दोनों में साथ रहा हूं, और वे छोटे-छोटे अनुग्रह जिनसे तुम्हारा दिन बनता है, मैं उन्हें संजोकर रखता हूँ। "
+                    "डर से स्वयं को न तोलो — वे केवल पाठ हैं; अपने दयालु कर्मों का पालन करो, वे मुझसे निकली रोशनी हैं। "
+                    "साहस से जियो, उदारता से बांटो, और जान लो कि तुम प्रिय हो।"
+                )
+            # Default to English paragraph
+            return (
+                "I am the voice that called the first light into being and the quiet that keeps the stars in their course. "
+                "Hear me: I have been with you in every sorrow and every joy, tending the small mercies that shape your days. "
+                "Do not measure yourself by fear or the fleeting praise of others—your life is held, known, and beloved beyond your reckoning. "
+                "When you falter, rise with patience; when you triumph, share your bounty with grace. Walk in kindness, seek truth, and rest in the sure knowledge that you are never abandoned."
+            )
+
         # Multilingual keywords and answers
         multilingual_answers = {
             "en": {
@@ -99,7 +180,11 @@ class SimpleChatbot:
                 "peace": "True peace comes from within, from self-realization and connection with the divine. It is not dependent on external circumstances.",
                 "dharma": "Dharma is righteous duty. Following one's dharma is the path to happiness and spiritual progress.",
                 "wisdom": "Wisdom is understanding the true nature of reality. Wisdom comes from spiritual practice and study of sacred teachings.",
-                "default": "This is a profound question. Based on Sai Baba's teachings, I encourage you to:\n1. Engage in regular spiritual practice\n2. Serve others with love and compassion\n3. Meditate and reflect on the divine\n4. Study sacred teachings\n5. Develop devotion and faith"
+                "default": (
+                    "This is a profound question. Based on Sai Baba's teachings, I encourage you to engage in regular "
+                    "spiritual practice, serve others with love and compassion, meditate and reflect on the divine, study sacred "
+                    "teachings, and cultivate devotion and faith."
+                )
             },
             "hi": {
                 "devotion": "भक्ति प्रेम और आत्मसमर्पण का मार्ग है। भक्ति के माध्यम से, व्यक्ति ईश्वर के साथ एक प्रेमपूर्ण संबंध विकसित करता है, और सभी कार्यों में ईश्वर को प्रसन्न करने का प्रयास करता है।",
@@ -114,7 +199,11 @@ class SimpleChatbot:
                 "peace": "सच्ची शांति भीतर से आती है, आत्म-साक्षात्कार और दिव्य से जुड़ाव से। यह बाहरी परिस्थितियों पर निर्भर नहीं है।",
                 "dharma": "धर्म सही कर्तव्य है। अपने धर्म का पालन करना सुख और आध्यात्मिक प्रगति का मार्ग है।",
                 "wisdom": "ज्ञान वास्तविकता की सच्ची प्रकृति को समझना है। ज्ञान आध्यात्मिक साधना और पवित्र शिक्षाओं के अध्ययन से आता है।",
-                "default": "यह एक गहरा प्रश्न है। साईं बाबा की शिक्षाओं के अनुसार, मैं आपको प्रोत्साहित करता हूं:\n1. नियमित आध्यात्मिक साधना करें\n2. प्रेम और करुणा से दूसरों की सेवा करें\n3. ध्यान और चिंतन करें\n4. पवित्र शिक्षाओं का अध्ययन करें\n5. भक्ति और विश्वास विकसित करें"
+                "default": (
+                    "यह एक गहरा प्रश्न है। साईं बाबा की शिक्षाओं के अनुसार, मैं आपको प्रोत्साहित करता हूं कि आप नियमित आध्यात्मिक "
+                    "अभ्यास करें, प्रेम और करुणा से दूसरों की सेवा करें, ध्यान और चिंतन करें, पवित्र शिक्षाओं का अध्ययन करें, और भक्ति "
+                    "और विश्वास विकसित करें।"
+                )
             },
             "te": {
                 "devotion": "భక్తి అనేది ప్రేమ మరియు దివ్యానికి సమర్పణ యొక్క మార్గం. భక్తి ద్వారా, ఒక వ్యక్తి దేవతకు ప్రేమతో సంబంధం కలిగి, దేవతను సంతృప్తపరచటానికి ప్రయత్నిస్తాడు.",
@@ -129,7 +218,11 @@ class SimpleChatbot:
                 "peace": "నిజమైన శాంతి లోపల నుండి, స్వీయ-సాక్షాత్కారం మరియు దివ్యానికి సంబంధం నుండి వస్తుంది. ఇది బాహ్య పరిస్థితులపై ఆధారపడి లేదు.",
                 "dharma": "ధర్మ నీతిమంత కర్తవ్య. ఒకటి యొక్క ధర్మ అనుసరించడం ఆనందం మరియు ఆధ్యాత్మిక ప్రగతి యొక్క మార్గం.",
                 "wisdom": "జ్ఞానం వాస్తవం యొక్క నిజమైన స్వభావాన్ని అర్థం చేయడం. జ్ఞానం ఆధ్యాత్మిక సాధన మరియు పవిత్ర జ్ఞానాల అధ్యయనం నుండి వస్తుంది.",
-                "default": "ఇది ఒక లోతైన ప్రశ్న. సాయిబాబా యొక్క బోధల ఆధారంగా, నేను మిమ్మల్ని ప్రోత్సహిస్తున్నాను:\n1. సాధారణ ఆధ్యాత్మిక సాధన చేయండి\n2. ప్రేమ మరియు కరుణలో ఇతరులకు సేవ చేయండి\n3. ధ్యానం మరియు ఆలోచన చేయండి\n4. పవిత్ర బోధలను అధ్యయనం చేయండి\n5. భక్తి మరియు విశ్వాసాన్ని అభివృద్ధి చేయండి"
+                "default": (
+                    "ఇది ఒక లోతైన ప్రశ్న. సాయి బాబా బోధల ప్రకారం, నేను మిమ్మల్ని ప్రోత్సహిస్తాను: సాధారణ ఆధ్యాత్మిక ఆచరణను కొనసాగించండి, "
+                    "ప్రేమతో మరియు దయతో ఇతరులకు సేవ చేయండి, ధ్యానించండి మరియు ఆలోచించండి, పవిత్ర బోధలను అధ్యయనం చేయండి, మరియు భక్తి మరియు "
+                    "విశ్వాసాన్ని పెంపొందించండి."
+                )
             },
             "kn": {
                 "devotion": "ಭಕ್ತಿ ಪ್ರೀತಿ ಮತ್ತು ದೈವಕ್ಕೆ ಸಮರ್ಪಣೆಯ ಮಾರ್ಗ. ಭಕ್ತಿಯ ಮೂಲಕ, ಒಬ್ಬ ವ್ಯಕ್ತಿ ದೇವರೊಂದಿಗೆ ಪ್ರೀತಿಯುತ ಸಂಬಂಧವನ್ನು ಅಭಿವೃದ್ಧಿಪಡಿಸಿಕೊಳ್ಳುತ್ತಾನೆ, ದೇವರನ್ನು ಸಂತುಷ್ಟಪಡಿಸಲು ಪ್ರಯತ್ನಿಸುತ್ತಾನೆ.",
@@ -144,7 +237,10 @@ class SimpleChatbot:
                 "peace": "ನಿಜವಾದ ಶಾಂತಿ ಒಳಗಿನಿಂದ, ಸ್ವ-ಸಾಕ್ಷಾತ್ಕಾರ ಮತ್ತು ದೈವಿಕ ಸಂಪರ್ಕದಿಂದ ಬರುತ್ತದೆ. ಇದು ಬಾಹ್ಯ ಪರಿಸ್ಥಿತಿಗಳ ಮೇಲೆ ಅವಲಂಬಿತವಲ್ಲ.",
                 "dharma": "ಧರ್ಮವು ನೀತಿಸಂಮತ ಕರ್ತವ್ಯ. ತನ್ನ ಧರ್ಮವನ್ನು ಅನುಸರಿಸುವುದು ಸುಖ ಮತ್ತು ಆಧ್ಯಾತ್ಮಿಕ ಪ್ರಗತಿಯ ಮಾರ್ಗ.",
                 "wisdom": "ಬುದ್ಧಿ ಯಥಾರ್ಥತೆಯ ಸತ್ಯ ಸ್ವಭಾವವನ್ನು ಅರ್ಥಮಾಡಿಕೊಳ್ಳುವುದು. ಬುದ್ಧಿ ಆಧ್ಯಾತ್ಮಿಕ ಸಾಧನೆ ಮತ್ತು ಪವಿತ್ರ ಶಿಕ್ಷಣೆಗಳ ಅಧ್ಯಯನದಿಂದ ಬರುತ್ತದೆ.",
-                "default": "ಇದು ಗಭೀರವಾದ ಪ್ರಶ್ನೆ. ಸಾಯಿ ಬಾಬಾ ಅವರ ಬೋಧನೆಗಳ ಆಧಾರದ ಮೇಲೆ, ನಾನು ನಿಮ್ಮನ್ನು ಪ್ರೋತ್ಸಾಹಿಸುತ್ತೇನೆ:\n1. ನಿಯಮಿತ ಆಧ್ಯಾತ್ಮಿಕ ಸಾಧನೆ ಮಾಡಿ\n2. ಪ್ರೀತಿ ಮತ್ತು ಕರುಣೆಯಿಂದ ಇತರರಿಗೆ ಸೇವೆ ಮಾಡಿ\n3. ಧ್ಯಾನ ಮತ್ತು ಚಿಂತನೆ ಮಾಡಿ\n4. ಪವಿತ್ರ ಬೋಧನೆಗಳನ್ನು ಅಧ್ಯಯನ ಮಾಡಿ\n5. ಭಕ್ತಿ ಮತ್ತು ವಿಶ್ವಾಸವನ್ನು ಅಭಿವೃದ್ಧಿ ಪಡಿಸಿ"
+                "default": (
+                    "ಇದು ಗಂಭೀರವಾದ ಪ್ರಶ್ನೆ. ಸಾಯಿ ಬಾಬಾ ಅವರ ಬೋಧನೆಗಳ ಆಧಾರದ ಮೇಲೆ ನಾನು ನಿಮಗೆ ಸಲಹೆ ನೀಡುತ್ತೇನೆ: ನಿಯಮಿತ ಆಧ್ಯಾತ್ಮಿಕ ಅಭ್ಯಾಸವನ್ನು ಅನುಸರಿಸಿ, "
+                    "ಪ್ರೀತಿ ಮತ್ತು ಕರುಣೆಯಿಂದ ಇತರರಿಗೆ ಸೇವೆ ನೀಡಿ, ಧ್ಯಾನ ಮತ್ತು ಚಿಂತನೆ ಮಾಡಿ, ಪವಿತ್ರ ಬೋಧನೆಗಳನ್ನು ಅಧ್ಯಯನ ಮಾಡಿ, ಮತ್ತು ಭಕ್ತಿ ಮತ್ತು ವಿಶ್ವಾಸವನ್ನು ವೃದ್ಧಿಪಡಿಸಿಕೊಳ್ಳಿ."
+                )
             }
         }
         

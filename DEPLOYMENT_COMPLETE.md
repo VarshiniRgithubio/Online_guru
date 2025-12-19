@@ -209,6 +209,7 @@ OPENAI_API_KEY=sk-...          # For OpenAI
 GOOGLE_API_KEY=...             # For Google Gemini
 
 # Model behavior
+USE_LLM=false                   # set true to enable LLM for all clients
 MODEL_TEMPERATURE=0.3           # 0=deterministic, 1=creative
 MODEL_NAME_OPENAI=gpt-4-turbo-preview
 MODEL_NAME_GEMINI=gemini-pro

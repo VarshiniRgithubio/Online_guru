@@ -9,6 +9,8 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict
 from loguru import logger
 from ask import SimpleChatbot
+from config import settings
+from rag_engine import MultilingualRAGEngine
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -26,8 +28,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize chatbot
-chatbot = SimpleChatbot()
+# Initialize backend engine based on settings
+engine_mode = "llm" if settings.use_llm else "simple"
+chatbot: Optional[SimpleChatbot] = None
+rag_engine: Optional[MultilingualRAGEngine] = None
+engine_initialized = False
+
+def get_engine():
+    """Lazy-load engine on first request to avoid blocking server startup."""
+    global engine_initialized, engine_mode, chatbot, rag_engine
+    
+    if engine_initialized:
+        return
+    
+    try:
+        if settings.use_llm:
+            logger.info("Initializing LLM engine...")
+            rag_engine = MultilingualRAGEngine()
+            logger.success("LLM engine initialized")
+        else:
+            logger.info("Initializing simple chatbot...")
+            chatbot = SimpleChatbot()
+            logger.success("Simple chatbot initialized")
+    except Exception as e:
+        logger.error(f"Engine initialization failed: {e}. Using simple fallback.")
+        engine_mode = "simple"
+        chatbot = SimpleChatbot()
+    
+    engine_initialized = True
 
 # Configure logging to be minimal
 logger.remove()
@@ -68,10 +96,28 @@ def root():
 @app.get("/health", tags=["Info"])
 def health():
     """Health check endpoint"""
-    return {
+    info = {
         "status": "healthy",
         "service": "Sai Baba Guidance Chatbot",
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "engine_mode": engine_mode,
+        "ai_provider": settings.ai_provider if settings.use_llm else None,
+        "model_name": settings.model_name if settings.use_llm else None,
+    }
+    return info
+
+
+@app.get("/config", tags=["Info"])
+def config_info():
+    """Return current AI configuration for verification."""
+    return {
+        "engine_mode": engine_mode,
+        "ai_provider": settings.ai_provider,
+        "model_name_openai": settings.model_name_openai,
+        "model_name_gemini": settings.model_name_gemini,
+        "temperature": settings.model_temperature,
+        "use_llm": settings.use_llm,
+        "supported_languages": settings.supported_languages,
     }
 
 
@@ -91,10 +137,15 @@ def ask_question(request: QuestionRequest):
     - `is_safe`: Whether the response passed safety checks
     """
     try:
+        get_engine()  # Initialize on first request
+        
         if not request.question or not request.question.strip():
             raise HTTPException(status_code=400, detail="Question cannot be empty")
         
-        result = chatbot.ask(request.question, request.language)
+        if engine_mode == "llm" and rag_engine is not None:
+            result = rag_engine.answer_question(request.question, request.language)
+        else:
+            result = chatbot.ask(request.question, request.language)
         return AnswerResponse(**result)
     
     except Exception as e:
@@ -115,10 +166,15 @@ def ask_question_get(question: str, language: Optional[str] = None):
     - `/ask?question=What%20is%20faith?&language=en`
     """
     try:
+        get_engine()  # Initialize on first request
+        
         if not question or not question.strip():
             raise HTTPException(status_code=400, detail="Question cannot be empty")
         
-        result = chatbot.ask(question, language)
+        if engine_mode == "llm" and rag_engine is not None:
+            result = rag_engine.answer_question(question, language)
+        else:
+            result = chatbot.ask(question, language)
         return AnswerResponse(**result)
     
     except Exception as e:

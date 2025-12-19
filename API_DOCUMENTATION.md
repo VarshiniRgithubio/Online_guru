@@ -151,9 +151,12 @@ curl "http://localhost:8000/ask?question=What%20is%20devotion?"
 **Response (200):**
 ```json
 {
-  "status": "running",
-  "version": "1.0",
-  "timestamp": "2025-12-10T10:30:00Z"
+  "status": "healthy",
+  "service": "Sai Baba Guidance Chatbot",
+  "version": "1.0.0",
+  "engine_mode": "simple | llm",
+  "ai_provider": "openai | gemini | null",
+  "model_name": "gpt-4-turbo-preview | gemini-pro | null"
 }
 ```
 
@@ -202,6 +205,24 @@ curl "http://localhost:8000/languages"
 ---
 
 ### 5️⃣ GET /docs - Interactive API Docs
+### 6️⃣ GET /config - Current AI Config
+
+**Purpose:** Show which model/provider the API is using
+
+**Endpoint:** `GET /config`
+
+**Response:**
+```json
+{
+  "engine_mode": "simple | llm",
+  "ai_provider": "openai",
+  "model_name_openai": "gpt-4-turbo-preview",
+  "model_name_gemini": "gemini-pro",
+  "temperature": 0.3,
+  "use_llm": true,
+  "supported_languages": ["en", "hi", "te", "kn"]
+}
+```
 
 **Purpose:** Swagger UI for interactive API testing
 

@@ -103,6 +103,9 @@ cp .env.example .env
 Edit `.env` file with your settings:
 
 ```env
+# Use LLM backend (OpenAI/Gemini) instead of simple local answers
+USE_LLM=false
+
 # Choose AI provider: openai or gemini
 AI_PROVIDER=openai
 
@@ -113,6 +116,8 @@ GOOGLE_API_KEY=your_google_api_key_here
 
 # Model settings (default values are production-ready)
 MODEL_TEMPERATURE=0.3
+MODEL_NAME_OPENAI=gpt-4-turbo-preview
+MODEL_NAME_GEMINI=gemini-pro
 CHUNK_SIZE=500
 CHUNK_OVERLAP=50
 ```

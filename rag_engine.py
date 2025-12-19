@@ -307,15 +307,21 @@ Answer:"""
                     language_instruction=language_instruction
                 )
                 
-                # Generate answer using LLM
+                # Generate answer using LLM with robust fallback to retrieved context
+                llm_error = None
                 try:
                     from langchain_core.messages import HumanMessage
                     response = self.llm.invoke([HumanMessage(content=formatted_prompt)])
                     answer = response.content
-                except:
-                    # Fallback: try direct invoke
-                    response = self.llm.invoke(formatted_prompt)
-                    answer = response.content if hasattr(response, 'content') else str(response)
+                except Exception as e:
+                    try:
+                        response = self.llm.invoke(formatted_prompt)
+                        answer = response.content if hasattr(response, 'content') else str(response)
+                    except Exception as e2:
+                        llm_error = f"LLM generation failed: {str(e2)}"
+                        logger.error(f"LLM generation failed: {e2}. Falling back to retrieved context.")
+                        # Fallback: return the retrieved context passages as the answer
+                        answer = context if context else "No contextual passages found."
             
             # Sanitize response
             answer = self.safety_filter.sanitize_response(answer)
@@ -333,13 +339,15 @@ Answer:"""
                 sources.append(source_info)
             
             logger.success(f"Question answered successfully in {detected_language}")
-            
-            return {
+            result = {
                 "answer": answer,
                 "language": detected_language,
                 "sources": sources,
                 "is_safe": True
             }
+            if 'llm_error' in locals() and llm_error:
+                result["error"] = llm_error
+            return result
             
         except Exception as e:
             logger.error(f"Error answering question: {str(e)}")
