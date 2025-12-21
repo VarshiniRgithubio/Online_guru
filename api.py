@@ -11,6 +11,22 @@ rag_lock = threading.Lock()
 class QuestionRequest(BaseModel):
     question: str
 
+@app.get("/")
+def root():
+    return {
+        "message": "Welcome to Sai Baba Guidance Chatbot",
+        "endpoints": {
+            "ask": "/ask (POST)",
+            "ask_get": "/ask?question=... (GET)",
+            "docs": "/docs (Interactive API docs)",
+            "health": "/health"
+        },
+        "example": {
+            "question": "What is devotion?",
+            "language": "en"
+        }
+    }
+
 
 @app.get("/health")
 def health():
