@@ -271,11 +271,72 @@ Produce the final answer now following the guidelines above.
 Answer:
 """
 
+        # If LangChain's PromptTemplate isn't available, return the raw template string
+        if PromptTemplate is None:
+            return template
+
         return PromptTemplate(
             template=template,
             input_variables=["context", "question", "language_instruction"]
         )
     
+    def _generate_answer_from_docs(self, docs: List[Document], detected_language: str) -> str:
+        """
+        Create a devotional 1-2 paragraph answer by concatenating top document chunks.
+        This is used when an LLM is not available (RAG-only mode).
+        """
+        if not docs:
+            return {
+                "en": "This guidance is not available in Sai Baba's teachings.",
+                "hi": "यह मार्गदर्शन साईं बाबा की शिक्षाओं में उपलब्ध नहीं है।",
+                "te": "ఈ మార్గదర్శకత్వం సాయి బాబా బోధలలో అందుబాటులో లేదు।",
+                "kn": "ಈ ಮಾರ್ಗದರ್ಶನವು ಸಾಯಿ ಬಾಬಾ ಅವರ ಬೋಧನೆಗಳಲ್ಲಿ ಲಭ್ಯವಿಲ್ಲ."
+            }.get(detected_language, "This guidance is not available in Sai Baba's teachings.")
+
+        # Take top 3 chunks as grounding
+        texts = [re.sub(r"\s+", " ", getattr(d, 'page_content', '')).strip() for d in docs[:3]]
+        # Keep non-empty parts
+        parts = [t for t in texts if t]
+        if not parts:
+            return ""
+
+        # Join into up to two paragraphs
+        if len(parts) == 1:
+            combined = parts[0]
+        else:
+            combined = "\n\n".join(parts[:2])
+
+        # Devotional prefix / gentle address per language
+        prefixes = {
+            'en': "My child,",
+            'hi': "मेरे बच्चे,",
+            'te': "నా బిడ్డా,",
+            'kn': "ನನ್ನ ಮಕ್ಕಳೆ,"
+        }
+        prefix = prefixes.get(detected_language, prefixes['en'])
+
+        # Compose final answer: prefix + grounded passages + gentle closing if single paragraph
+        paragraphs = [p.strip() for p in re.split(r"\n\s*\n", combined) if p.strip()]
+        if not paragraphs:
+            return prefix + " " + combined
+
+        # Prepend prefix to first paragraph
+        paragraphs[0] = prefix + " " + paragraphs[0]
+
+        if len(paragraphs) == 1:
+            closings = {
+                'en': " May you find peace and strength in these teachings.",
+                'hi': " इन शिक्षाओं में आपको शांति और शक्ति मिले।",
+                'te': " ఈ బోధనలలో మీకో శాంతి మరియు శక్తి లభించాలి.",
+                'kn': "ಈ ಬೋಧನೆಗಳಲ್ಲಿ ನಿಮಗೆ ಶಾಂತಿ ಮತ್ತು ಶಕ್ತಿ ದೊರಕಲಿ."
+            }
+            paragraphs[0] = paragraphs[0].strip() + closings.get(detected_language, closings['en'])
+
+        answer = "\n\n".join(paragraphs)
+        # Normalize whitespace
+        answer = re.sub(r"\s+", " ", answer).strip()
+        return answer
+
     def _create_qa_chain(self):
         """
         Create a simple retrieval and generation chain using modern LangChain.
@@ -370,21 +431,25 @@ Answer:
                     language_instruction=language_instruction
                 )
                 
-                # Generate answer using LLM with robust fallback to retrieved context
+                # Generate answer using LLM if available; otherwise produce RAG-only answer
                 llm_error = None
-                try:
-                    from langchain_core.messages import HumanMessage
-                    response = self.llm.invoke([HumanMessage(content=formatted_prompt)])
-                    answer = response.content
-                except Exception as e:
+                if self.llm is None:
+                    # RAG-only mode: produce a devotional 1-2 paragraph answer from retrieved docs
+                    answer = self._generate_answer_from_docs(source_docs, detected_language)
+                else:
                     try:
-                        response = self.llm.invoke(formatted_prompt)
-                        answer = response.content if hasattr(response, 'content') else str(response)
-                    except Exception as e2:
-                        llm_error = f"LLM generation failed: {str(e2)}"
-                        logger.error(f"LLM generation failed: {e2}. Falling back to retrieved context.")
-                        # Fallback: return the retrieved context passages as the answer
-                        answer = context if context else "No contextual passages found."
+                        from langchain_core.messages import HumanMessage
+                        response = self.llm.invoke([HumanMessage(content=formatted_prompt)])
+                        answer = response.content
+                    except Exception as e:
+                        try:
+                            response = self.llm.invoke(formatted_prompt)
+                            answer = response.content if hasattr(response, 'content') else str(response)
+                        except Exception as e2:
+                            llm_error = f"LLM generation failed: {str(e2)}"
+                            logger.error(f"LLM generation failed: {e2}. Falling back to retrieved context.")
+                            # Fallback to RAG-only generation using retrieved docs
+                            answer = self._generate_answer_from_docs(source_docs, detected_language)
             
             # Sanitize response
             answer = self.safety_filter.sanitize_response(answer)
