@@ -346,9 +346,8 @@ Formatted Response + Sources
 3. Adjust language support in `config.py`
 
 ### Deployment
-1. Docker: Use in containers
-2. Serverless: AWS Lambda, Google Cloud Functions
-3. Traditional: Deploy on VPS with Gunicorn
+1. Serverless: AWS Lambda, Google Cloud Functions
+2. Traditional: Deploy on VPS with Gunicorn
 
 ---
 

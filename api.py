@@ -11,6 +11,7 @@ from typing import Optional, List, Dict
 from contextlib import asynccontextmanager
 import uvicorn
 from loguru import logger
+import re
 
 from config import settings
 from rag_engine import MultilingualRAGEngine
@@ -35,19 +36,10 @@ class SourceInfo(BaseModel):
 
 
 class AnswerResponse(BaseModel):
-    """Response model for answers."""
-    answer: str = Field(description="The spiritual guidance answer")
-    language: str = Field(description="Detected/Response language (en, hi, te, kn)")
-    sources: Optional[List[SourceInfo]] = Field(
-        default=None,
-        description="Source documents used for the answer"
-    )
-    is_safe: bool = Field(
-        description="Whether the question passed safety checks"
-    )
-    disclaimer: str = Field(
-        description="Important disclaimer about the guidance"
-    )
+    """Simplified response model required by deployment spec."""
+    answer: str = Field(description="The spiritual guidance answer, 1-2 paragraphs")
+    sources: List[str] = Field(description="List of source document names or teaching references")
+    is_safe: bool = Field(description="Whether the question passed safety checks")
 
 
 class HealthResponse(BaseModel):
@@ -90,17 +82,25 @@ async def lifespan(app: FastAPI):
         # Initialize Multilingual RAG engine
         logger.info("Initializing Multilingual RAG engine...")
         rag_engine = MultilingualRAGEngine()
-        
-        # Validate system
+
+        # Check whether a persisted vector DB exists (do NOT build here)
+        from pathlib import Path
+        vec_path = Path(settings.vector_db_path)
+        has_vectors = any(vec_path.iterdir()) if vec_path.exists() else False
+        if not has_vectors or getattr(rag_engine, 'vector_store', None) is None:
+            logger.warning("Vector DB not found. Please run ingest.py to build the vector database before using retrieval features.")
+        else:
+            logger.info("Vector DB loaded and ready to serve retrieval queries.")
+
+        # Validate system (do not fail startup on degraded status)
         validation = rag_engine.validate_system()
         if validation.get("status") != "healthy":
-            logger.error(f"System validation failed: {validation}")
-            raise RuntimeError("RAG system validation failed")
-        
-        logger.success("API server started successfully")
-        logger.info(f"Vector store size: {validation.get('vector_store_size')} vectors")
-        logger.info(f"LLM provider: {validation.get('llm_provider')}")
-        logger.info(f"Supported languages: {', '.join(settings.supported_languages)}")
+            logger.warning(f"RAG system validation returned non-healthy status: {validation}")
+        else:
+            logger.success("RAG system healthy")
+            logger.info(f"Vector store size: {validation.get('vector_store_size')} vectors")
+            logger.info(f"LLM provider: {validation.get('llm_provider')}")
+            logger.info(f"Supported languages: {', '.join(settings.supported_languages)}")
         
     except Exception as e:
         logger.error(f"Failed to start API server: {str(e)}")
@@ -256,31 +256,39 @@ async def ask_question(request: QuestionRequest):
         
         logger.info(f"Received question: {request.question[:100]}...")
         
+        # If vector DB is not initialized, return a graceful message (do not attempt ingestion)
+        if getattr(rag_engine, 'vector_store', None) is None:
+            msg = "Knowledge base is not initialized yet. Please run ingest.py to build the knowledge base."
+            return AnswerResponse(answer=msg, sources=["vector_db not initialized"], is_safe=False)
+
         # Get answer from multilingual RAG engine
         result = rag_engine.answer_question(request.question)
         
-        # Prepare multilingual disclaimer
-        disclaimers = {
-            "en": "This guidance is based on Sai Baba's teachings available in our database. For personal spiritual matters, consider seeking guidance from qualified spiritual teachers. This is not medical, legal, or predictive advice.",
-            "hi": "यह मार्गदर्शन हमारे डेटाबेस में उपलब्ध साईं बाबा की शिक्षाओं पर आधारित है। व्यक्तिगत आध्यात्मिक मामलों के लिए योग्य आध्यात्मिक शिक्षकों से मार्गदर्शन लेने पर विचार करें। यह चिकित्सा, कानूनी या भविष्यवाणी संबंधी सलाह नहीं है।",
-            "te": "ఈ మార్గదర్శకత్వం మా డేటాబేస్‌లో అందుబాటులో ఉన్న సాయి బాబా బోధలపై ఆధారపడి ఉంది. వ్యక్తిగత ఆధ్యాత్మిక విషయాల కోసం, అర్హత కలిగిన ఆధ్యాత్మిక గురువుల నుండి మార్గదర్శకత్వం పొందండి. ఇది వైద్య, న్యాయ లేదా భవిష్యత్ సలహా కాదు।",
-            "kn": "ಈ ಮಾರ್ಗದರ್ಶನವು ನಮ್ಮ ಡೇಟಾಬೇಸ್‌ನಲ್ಲಿ ಲಭ್ಯವಿರುವ ಸಾಯಿಬಾಬಾ ಅವರ ಬೋಧನೆಗಳ ಮೇಲೆ ಆಧಾರಿತವಾಗಿದೆ. ವೈಯಕ್ತಿಕ ಆಧ್ಯಾತ್ಮಿಕ ವಿಷಯಗಳಿಗಾಗಿ, ಅರ್ಹ ಆಧ್ಯಾತ್ಮಿಕ ಗುರುಗಳಿಂದ ಮಾರ್ಗದರ್ಶನವನ್ನು ಪಡೆಯುವುದನ್ನು ಪರಿಗಣಿಸಿ. ಇದು ವೈದ್ಯಕೀಯ, ಕಾನೂನು ಅಥವಾ ಭವಿಷ್ಯ ಸಲಹೆ ಅಲ್ಲ."
-        }
-        
-        detected_lang = result.get("language", "en")
-        disclaimer = disclaimers.get(detected_lang, disclaimers["en"])
-        
+        # Build simplified response: extract source names if available
+        sources = []
+        for s in result.get("sources", []):
+            meta = s.get("metadata") if isinstance(s, dict) else None
+            if meta and isinstance(meta, dict):
+                src = meta.get("source") or meta.get("file") or meta.get("source_name")
+            else:
+                # fall back to any content hint
+                src = s.get("content")[:120] if isinstance(s, dict) and s.get("content") else str(s)
+            if src:
+                sources.append(src)
+
+        if not sources:
+            sources = ["Teachings and guidance"]
+
+        answer = result.get("answer", "")
+        answer = re.sub(r"\s+", " ", answer).strip()
+
         response = AnswerResponse(
-            answer=result["answer"],
-            language=detected_lang,
-            sources=[
-                SourceInfo(content=s["content"], metadata=s["metadata"])
-                for s in result.get("sources", [])
-            ] if result.get("sources") else None,
-            is_safe=result.get("is_safe", True),
-            disclaimer=disclaimer
+            answer=answer,
+            sources=sources,
+            is_safe=result.get("is_safe", True)
         )
-        
+
+        detected_lang = result.get("language", "en")
         logger.success(f"Question answered successfully in {detected_lang}")
         return response
         

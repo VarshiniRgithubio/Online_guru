@@ -288,7 +288,7 @@ for lang, question in questions.items():
 
 1. **Add More Data** - The more multilingual content, the better
 2. **Tune Settings** - Adjust chunk size and retrieval count in `.env`
-3. **Deploy** - Use Docker for production deployment
+3. **Deploy** - Use a cloud platform for production deployment
 4. **Build Frontend** - Connect your multilingual UI to the API
 
 ## Support Resources

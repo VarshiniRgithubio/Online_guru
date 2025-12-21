@@ -337,9 +337,9 @@ OSError: [Errno 48] Address already in use
    - Modify prompts in `_create_prompt_template()`
 
 4. **Deploy to production:**
-   - Use Docker/Kubernetes for scaling
-   - Add authentication & rate limiting
-   - Use managed databases for vector store
+  - Use Kubernetes or managed cloud platform for scaling
+  - Add authentication & rate limiting
+  - Use managed databases for vector store
 
 ---
 

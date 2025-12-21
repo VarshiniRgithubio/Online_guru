@@ -341,24 +341,6 @@ python api.py
 
 ## Production Deployment
 
-### Docker (Recommended)
-
-Create `Dockerfile`:
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY . .
-CMD ["python", "api.py"]
-```
-
-Build and run:
-```bash
-docker build -t sai-baba-api .
-docker run -p 8000:8000 --env-file .env sai-baba-api
-```
-
 ### Security Considerations
 
 1. **API Keys**: Use environment variables, never commit to git

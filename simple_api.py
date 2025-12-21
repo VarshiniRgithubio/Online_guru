@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 from loguru import logger
+import re
 from ask import SimpleChatbot
 from config import settings
 from rag_engine import MultilingualRAGEngine
@@ -146,6 +147,12 @@ def ask_question(request: QuestionRequest):
             result = rag_engine.answer_question(request.question, request.language)
         else:
             result = chatbot.ask(request.question, request.language)
+
+        # Clean up whitespace/newlines in the final answer for nicer formatting
+        answer = result.get("answer", "")
+        answer = re.sub(r"\s+", " ", answer).strip()
+        result["answer"] = answer
+
         return AnswerResponse(**result)
     
     except Exception as e:
@@ -175,6 +182,12 @@ def ask_question_get(question: str, language: Optional[str] = None):
             result = rag_engine.answer_question(question, language)
         else:
             result = chatbot.ask(question, language)
+
+        # Clean up whitespace/newlines in the final answer
+        answer = result.get("answer", "")
+        answer = re.sub(r"\s+", " ", answer).strip()
+        result["answer"] = answer
+
         return AnswerResponse(**result)
     
     except Exception as e:

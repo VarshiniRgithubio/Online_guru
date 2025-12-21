@@ -58,11 +58,6 @@ online guru/
 ```
 
 ---
-
-## 🚀 Quick Installation
-
-```powershell
-# 1. Setup environment
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 
@@ -71,11 +66,6 @@ pip install -r requirements.txt
 
 # 3. Configure
 cp .env.example .env
-# Edit .env and add your OPENAI_API_KEY or GOOGLE_API_KEY
-
-# 4. Verify setup
-python setup.py
-```
 
 ---
 
@@ -84,11 +74,7 @@ python setup.py
 ### Step 1: Add Multilingual Data
 
 Place your content in the appropriate folders:
-
-```
-data/           ← PDF and TXT files (any of the 4 languages)
 audio/          ← Audio speeches (.mp3, .wav) in any language
-```
 
 ### Step 2: Process Audio (Optional)
 
@@ -110,35 +96,15 @@ python ingest.py
 ```
 
 **What it does:**
-- Loads all documents from `data/` folder (all languages)
 - Uses multilingual embeddings (paraphrase-multilingual-MiniLM-L12-v2)
 - Chunks documents (500 chars, 50 overlap)
 - Creates FAISS vector store for cross-lingual search
 - Persists to `vector_db/` folder
 
-### Step 4: Start API Server
-
-```powershell
-python api.py
-```
-
 **Access:**
-- API: http://localhost:8000
-- Interactive Docs: http://localhost:8000/docs
-- Alternative Docs: http://localhost:8000/redoc
-
 ---
 
-## 🔌 API Usage Examples
-
-### Example 1: English Question
-
-**Request:**
-```bash
-curl -X POST "http://localhost:8000/ask" \
-  -H "Content-Type: application/json" \
   -d "{\"question\": \"What is the importance of faith?\"}"
-```
 
 **Response:**
 ```json
@@ -179,7 +145,6 @@ curl -X POST "http://localhost:8000/ask" \
   -H "Content-Type: application/json" \
   -d "{\"question\": \"విశ్వాసం యొక్క ప్రాముఖ్యత ఏమిటి?\"}"
 ```
-
 **Response:**
 ```json
 {
@@ -211,7 +176,6 @@ curl -X POST "http://localhost:8000/ask" \
 }
 ```
 
----
 
 ## 🏗️ System Architecture
 
@@ -222,7 +186,6 @@ curl -X POST "http://localhost:8000/ask" \
 └──────────────────┬─────────────────────────────────┘
                    │
                    ▼
-┌────────────────────────────────────────────────────┐
 │         Speech-to-Text Layer (Whisper)            │
 │  • Auto language detection                         │
 │  • Multilingual transcription                      │
@@ -246,7 +209,6 @@ curl -X POST "http://localhost:8000/ask" \
 └──────────────────┬─────────────────────────────────┘
                    │
                    ▼
-┌────────────────────────────────────────────────────┐
 │          Vector Database (FAISS)                   │
 │  • Cross-lingual semantic search                   │
 │  • Persistent storage                              │
@@ -267,7 +229,6 @@ curl -X POST "http://localhost:8000/ask" \
 │  • Generate answer with LLM                        │
 │  • Apply safety filters                            │
 │  • Format in question language                     │
-└──────────────────┬─────────────────────────────────┘
                    │
                    ▼
 ┌────────────────────────────────────────────────────┐
@@ -286,7 +247,6 @@ curl -X POST "http://localhost:8000/ask" \
 ### Implemented Across All Languages:
 
 1. **Topic Filtering**
-   - ❌ Medical advice blocked
    - ❌ Legal advice blocked
    - ❌ Predictive/fortune-telling blocked
    - ✅ Language-aware error messages
@@ -306,7 +266,6 @@ curl -X POST "http://localhost:8000/ask" \
 ## 📊 Technology Stack
 
 ### Core Technologies
-- **Python 3.9+** - Programming language
 - **FastAPI** - Web framework
 - **LangChain** - RAG framework
 - **FAISS** - Vector database
@@ -316,24 +275,15 @@ curl -X POST "http://localhost:8000/ask" \
 ### AI Models
 - **LLM**: OpenAI GPT-4 or Google Gemini
 - **Embeddings**: paraphrase-multilingual-MiniLM-L12-v2
-- **Speech**: Whisper (base/small/medium/large)
 - **Language Detection**: langdetect
 
 ### Key Libraries
 - `langchain` - RAG pipeline
 - `faiss-cpu` - Vector search
-- `openai-whisper` - Audio transcription
 - `sentence-transformers` - Embeddings
 - `langdetect` - Language detection
 - `pypdf` - PDF processing
-- `loguru` - Logging
-- `pydantic` - Data validation
 
----
-
-## ⚙️ Configuration
-
-### Environment Variables (.env)
 
 ```env
 # AI Provider
@@ -440,17 +390,6 @@ for question in questions:
 ---
 
 ## 🚀 Production Deployment
-
-### Docker Deployment
-
-```dockerfile
-FROM python:3.11-slim
-
-# Indic language support
-RUN apt-get update && apt-get install -y \
-    fonts-indic locales && \
-    locale-gen en_US.UTF-8
-
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
 

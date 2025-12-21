@@ -418,23 +418,6 @@ for q in questions:
    - Increase for longer context needs
 
 ## Production Deployment
-
-### Docker
-
-```dockerfile
-FROM python:3.11-slim
-
-# Install dependencies for Indic language support
-RUN apt-get update && apt-get install -y \
-    fonts-indic \
-    locales \
-    && rm -rf /var/lib/apt/lists/*
-
-# Set locale
-RUN locale-gen en_US.UTF-8
-ENV LANG=en_US.UTF-8
-ENV LC_ALL=en_US.UTF-8
-
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt

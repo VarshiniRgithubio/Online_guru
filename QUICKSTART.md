@@ -112,7 +112,7 @@ print(response.json()["answer"])
 
 1. **Add more data**: The more content, the better the answers
 2. **Tune settings**: Adjust `CHUNK_SIZE` and `TOP_K_RESULTS` in `.env`
-3. **Deploy**: Use Docker or cloud platform for production
+3. **Deploy**: Use a cloud platform for production
 4. **Build frontend**: Connect your UI to the API
 
 ## Support

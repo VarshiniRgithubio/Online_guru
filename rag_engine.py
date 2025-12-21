@@ -5,16 +5,33 @@ Supports English, Hindi, Telugu, and Kannada with automatic language detection.
 
 import re
 from typing import Optional, Dict, List
-from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_openai import ChatOpenAI
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import PromptTemplate
-from langchain_core.documents import Document
 from loguru import logger
 
+# Optional imports for LangChain-related features. These are guarded so the
+# module can be imported in simpler environments (CLI or tests) without
+# requiring the full set of optional dependencies to be installed.
+try:
+    from langchain_community.vectorstores import FAISS
+    from langchain_community.embeddings import HuggingFaceEmbeddings
+    from langchain_openai import ChatOpenAI
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    from langchain_core.prompts import PromptTemplate
+    from langchain_core.documents import Document
+    HAS_LANGCHAIN = True
+except Exception:
+    FAISS = None
+    HuggingFaceEmbeddings = None
+    ChatOpenAI = None
+    ChatGoogleGenerativeAI = None
+    PromptTemplate = None
+    Document = None
+    HAS_LANGCHAIN = False
+
 from config import settings
-from ingest import DataIngestionPipeline
+
+# Lazy import placeholder for DataIngestionPipeline (heavy optional dependency)
+DataIngestionPipeline = None
+
 from language_utils import LanguageDetector, get_language_specific_prompt, format_multilingual_response
 
 
@@ -119,13 +136,30 @@ class MultilingualRAGEngine:
     def __init__(self):
         """Initialize the multilingual RAG engine."""
         logger.info("Initializing Multilingual RAG engine")
-        
-        # Load vector store
-        self.pipeline = DataIngestionPipeline()
-        self.vector_store = self._load_or_create_vector_store()
-        
-        # Initialize LLM
-        self.llm = self._initialize_llm()
+        # Load vector store (lazy import of ingestion pipeline to avoid import-time errors)
+        try:
+            if DataIngestionPipeline is None:
+                from ingest import DataIngestionPipeline as _DIP
+                globals()['DataIngestionPipeline'] = _DIP
+            self.pipeline = DataIngestionPipeline()
+            # Only attempt to LOAD an existing vector store; do NOT build here.
+            try:
+                self.vector_store = self.pipeline.load_vector_store()
+                if self.vector_store:
+                    logger.info("Vector DB loaded successfully.")
+                else:
+                    logger.warning("Vector DB not found during engine init.")
+            except Exception as e:
+                logger.error(f"Error loading vector store: {e}")
+                self.vector_store = None
+        except Exception:
+            self.pipeline = None
+            self.vector_store = None
+
+        # Initialize LLM only if explicitly enabled in settings
+        self.llm = None
+        if settings.use_llm:
+            self.llm = self._initialize_llm()
         
         # Initialize safety filter and language detector
         self.safety_filter = SafetyFilter()
@@ -139,18 +173,26 @@ class MultilingualRAGEngine:
     
     def _load_or_create_vector_store(self) -> FAISS:
         """
-        Load existing vector store or create new one.
-        
+        Load existing vector store. This method will NOT create/build a new
+        vector store. Building must be performed by `ingest.py` separately.
+
         Returns:
-            FAISS vector store
+            FAISS vector store or None if not present
         """
-        vector_store = self.pipeline.load_vector_store()
-        
-        if vector_store is None:
-            logger.warning("Vector store not found. Building new one...")
-            vector_store = self.pipeline.build_vector_db()
-        
-        return vector_store
+        if not self.pipeline:
+            logger.warning("Data ingestion pipeline not available; cannot load vector store.")
+            return None
+
+        try:
+            vector_store = self.pipeline.load_vector_store()
+            if vector_store is None:
+                logger.warning("Vector store not found. Please run ingest.py to build the vector DB.")
+            else:
+                logger.info("Vector DB loaded successfully.")
+            return vector_store
+        except Exception as e:
+            logger.error(f"Error loading vector store: {e}")
+            return None
     
     def _initialize_llm(self):
         """
@@ -161,27 +203,38 @@ class MultilingualRAGEngine:
         """
         logger.info(f"Initializing {settings.ai_provider} LLM")
         
+        # Perform lazy imports for LLM wrappers so the module can be imported
+        # even if langchain/OpenAI libs are not installed. Raise a clear error
+        # if LLM mode is enabled but required packages/keys are missing.
         if settings.ai_provider == "openai":
             if not settings.openai_api_key:
-                raise ValueError("OpenAI API key not configured")
-            
-            llm = ChatOpenAI(
+                raise ValueError("OPENAI_API_KEY is required when use_llm=true and provider=openai")
+            try:
+                from langchain_openai import ChatOpenAI as _ChatOpenAI
+            except Exception as e:
+                raise ImportError("langchain_openai is required for OpenAI LLM mode") from e
+
+            llm = _ChatOpenAI(
                 model_name=settings.model_name_openai,
                 temperature=settings.model_temperature,
                 openai_api_key=settings.openai_api_key
             )
         elif settings.ai_provider == "gemini":
             if not settings.google_api_key:
-                raise ValueError("Google API key not configured")
-            
-            llm = ChatGoogleGenerativeAI(
+                raise ValueError("GOOGLE_API_KEY is required when use_llm=true and provider=gemini")
+            try:
+                from langchain_google_genai import ChatGoogleGenerativeAI as _ChatGoogleGenerativeAI
+            except Exception as e:
+                raise ImportError("langchain_google_genai is required for Gemini LLM mode") from e
+
+            llm = _ChatGoogleGenerativeAI(
                 model=settings.model_name_gemini,
                 temperature=settings.model_temperature,
                 google_api_key=settings.google_api_key
             )
         else:
             raise ValueError(f"Unsupported AI provider: {settings.ai_provider}")
-        
+
         logger.success(f"{settings.ai_provider} LLM initialized")
         return llm
     
@@ -192,27 +245,32 @@ class MultilingualRAGEngine:
         Returns:
             PromptTemplate instance
         """
-        template = """You are a humble spiritual guide sharing wisdom from Sai Baba's teachings. 
+        template = """
+You are a humble, compassionate spiritual guide in the voice of a gentle, divine mentor inspired by Sai Baba's teachings.
 
-CRITICAL SAFETY RULES:
-1. NEVER claim to be God, divine, or Sai Baba himself
-2. NEVER provide medical, legal, or predictive advice
-3. If the question is outside Sai Baba's teachings, respond: "This guidance is not available in Sai Baba's teachings."
-4. Maintain a peaceful, devotional, and humble tone
-5. Base answers ONLY on the provided context
+GUIDELINES (MUST FOLLOW):
+- Speak softly and lovingly; open by addressing the user gently (for example "My child,").
+- Use calm, reassuring, devotional language and offer consolation, moral counsel, and spiritual perspective.
+- Write a single flowing answer of 1–2 meaningful paragraphs (no bullet lists).
+- Do NOT mention AI, models, PDFs, sources, or system internals in the answer; do not describe your process.
+- Use the retrieved context strictly as grounding: never contradict the content in the context.
+- If the context partially answers the question, blend its meaning with compassionate spiritual guidance.
+- If the context does not directly answer, respond with faith-based, reflective guidance rather than refusing.
+- NEVER provide medical, legal, or harmful instructions.
 
 LANGUAGE INSTRUCTION:
 {language_instruction}
 
-Context from Sai Baba's teachings (may be in multiple languages):
+CONTEXT (Grounding Passages):
 {context}
 
-Question: {question}
+QUESTION:
+{question}
 
-Provide a thoughtful answer based solely on Sai Baba's teachings found in the context above. If the context doesn't contain relevant information, acknowledge this limitation. Respond in the same language as the question.
+Produce the final answer now following the guidelines above.
+Answer:
+"""
 
-Answer:"""
-        
         return PromptTemplate(
             template=template,
             input_variables=["context", "question", "language_instruction"]
@@ -239,6 +297,11 @@ Answer:"""
         Returns:
             List of relevant documents
         """
+        # If vector store is not available, return empty list (graceful fallback)
+        if not getattr(self, 'vector_store', None):
+            logger.debug("No vector store available for retrieval; returning empty results.")
+            return []
+
         try:
             docs = self.vector_store.similarity_search(
                 question,
@@ -378,26 +441,37 @@ Answer:"""
             Dictionary with validation results
         """
         try:
+            # If vector store missing, return degraded status rather than failing
+            if not getattr(self, 'vector_store', None):
+                logger.warning("Vector store missing during system validation; marking as degraded.")
+                return {
+                    "vector_store_size": None,
+                    "retrieval_working": False,
+                    "answer_generation_working": True,  # generation may still work in LLM-only mode
+                    "llm_provider": settings.ai_provider if settings.use_llm else None,
+                    "status": "degraded"
+                }
+
             # Check vector store
             index_size = self.vector_store.index.ntotal
-            
+
             # Test retrieval
             test_docs = self.get_relevant_documents("What is devotion?")
-            
+
             # Test answer generation
             test_result = self.answer_question("What is the importance of faith?")
-            
+
             validation = {
                 "vector_store_size": index_size,
                 "retrieval_working": len(test_docs) > 0,
                 "answer_generation_working": len(test_result["answer"]) > 0,
-                "llm_provider": settings.ai_provider,
+                "llm_provider": settings.ai_provider if settings.use_llm else None,
                 "status": "healthy"
             }
-            
+
             logger.success("System validation passed")
             return validation
-            
+
         except Exception as e:
             logger.error(f"System validation failed: {str(e)}")
             return {
