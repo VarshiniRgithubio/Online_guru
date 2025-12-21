@@ -136,6 +136,30 @@ class MultilingualRAGEngine:
     def __init__(self):
         """Initialize the multilingual RAG engine."""
         logger.info("Initializing Multilingual RAG engine")
+        # Runtime installer for heavy ML packages. This keeps the container
+        # image small; missing packages will be installed on first /ask.
+        def _install(pkg: str):
+            import subprocess, sys
+            try:
+                logger.info(f"Installing missing package: {pkg}")
+                subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
+                logger.success(f"Installed package: {pkg}")
+            except Exception as ie:
+                logger.error(f"Failed to install {pkg}: {ie}")
+
+        # Only attempt to install key ML libs if they are missing. These
+        # installs are best-effort: failures are logged but do not raise.
+        try:
+            import sentence_transformers  # type: ignore
+        except Exception:
+            logger.info("sentence-transformers not found; attempting runtime install.")
+            _install("sentence-transformers")
+
+        try:
+            import torch  # type: ignore
+        except Exception:
+            logger.info("torch not found; attempting runtime install.")
+            _install("torch")
         # Load vector store (lazy import of ingestion pipeline to avoid import-time errors)
         try:
             if DataIngestionPipeline is None:
