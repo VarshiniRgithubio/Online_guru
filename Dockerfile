@@ -6,8 +6,14 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
+# ⬇️ COPY VECTOR DB EXPLICITLY
+COPY vector_db ./vector_db
+
+# ⬇️ COPY APP CODE
 COPY . .
 
+# ⬇️ TELL APP WHERE VECTOR DB IS
+ENV VECTOR_DB_PATH=/app/vector_db
 ENV PORT=8080
 
 EXPOSE 8080
