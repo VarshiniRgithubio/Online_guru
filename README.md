@@ -381,4 +381,25 @@ For issues or questions:
 
 ---
 
+## Live Demo (Frontend)
+
+The Sai Baba Spiritual Guidance Chatbot is also available as a live web application.
+
+🔗 **Live Application**:  
+https://spiritual-ai-guru-app.vercel.app/
+
+### How it works
+- The frontend is built and deployed separately (Vercel)
+- It communicates with this FastAPI backend via REST APIs
+- All questions are processed using the RAG-based backend deployed on Google Cloud Run
+
+### Supported Features
+- Ask spiritual questions in natural language
+- Safe and ethical responses based on Sai Baba’s teachings
+- Real-time answers powered by the deployed backend API
+- Mobile and desktop friendly UI
+
+### Backend API Used
+The frontend connects to the production backend deployed on Google Cloud Run:
+
 **Disclaimer**: This system provides spiritual guidance based on available teachings. It is not a substitute for personal spiritual practice, qualified teachers, or professional advice in medical, legal, or other specialized domains.
